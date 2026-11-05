@@ -20,8 +20,8 @@
 //!
 //! **DFS algorithm.** `compute_longest_road` performs exhaustive simple-path
 //! search. It starts DFS only from vertices with degree != 2 (leaves or
-//! branch points), since an optimal path's endpoints must have odd degree or
-//! be branch points. A pure-cycle fallback handles the all-degree-2 case.
+//! branch points) or under an opponent building, since an optimal path's
+//! endpoints must be one of those. A pure-cycle fallback handles the all-degree-2 case.
 //! `dfs_road` walks edges via a `visited` bitmask, stopping at opponent
 //! buildings.
 
@@ -81,9 +81,11 @@ impl RoadNetwork {
 
         if update_longest && self.roads.count_ones() >= 5 {
             if deg_a == 0 || deg_b == 0 {
-                // Leaf extension: DFS from just the new tip.
-                let tip = if deg_a == 0 { ep_a } else { ep_b };
-                let from_tip = dfs_road(tip, 0, self.roads, adj, opp_buildings);
+                // Leaf extension: any new longest path ends at the new tip,
+                // so walk back from the base. Starting the DFS at the tip
+                // itself would return 0 if the tip is an opponent building.
+                let base = if deg_a == 0 { ep_b } else { ep_a };
+                let from_tip = dfs_road(base, 1u128 << eid.0, self.roads, adj, opp_buildings) + 1;
                 self.longest_len = self.longest_len.max(from_tip);
             } else {
                 // Both endpoints already in network (bridge/branch): full recompute.
@@ -178,7 +180,7 @@ fn compute_longest_road_nodes(
     let mut found_start = false;
 
     for node in 0..54usize {
-        if degree[node] != 0 && degree[node] != 2 {
+        if degree[node] != 0 && (degree[node] != 2 || opp_buildings & (1u64 << node) != 0) {
             found_start = true;
             let incident = adj.node_adj_edges[node] & player_roads;
             let mut rem = incident;
@@ -283,7 +285,8 @@ fn compute_longest_road(player_roads: u128, adj: &AdjacencyBitboards, opp_buildi
 
     // Compute degree of each vertex in the road subgraph.
     // The longest trail's endpoints must have degree != 2 (leaves or branch
-    // points), so we only need to start DFS from those vertices.
+    // points) or sit on an opponent building (which splits the network), so
+    // we only need to start DFS from those vertices.
     let mut degree = [0u8; 54];
     let mut any_vertex = 0usize;
     let mut remaining = player_roads;
@@ -303,7 +306,7 @@ fn compute_longest_road(player_roads: u128, adj: &AdjacencyBitboards, opp_buildi
     let mut found_start = false;
 
     for node in 0..54usize {
-        if degree[node] != 0 && degree[node] != 2 {
+        if degree[node] != 0 && (degree[node] != 2 || opp_buildings & (1u64 << node) != 0) {
             found_start = true;
             let incident = adj.node_adj_edges[node] & player_roads;
             let mut rem = incident;
@@ -566,5 +569,57 @@ mod tests {
             );
         }
         // If no bridge found, the test still validates the two-component case
+    }
+
+    #[test]
+    fn leaf_extension_onto_opponent_building_counts() {
+        let topo = make_topo();
+        let adj = &topo.adj;
+        let mut net = RoadNetwork::new();
+
+        net.add_building(NodeId(0), adj, 0);
+
+        // A chain of 5 roads whose last road ends on an opponent building.
+        let mut current = 0usize;
+        let mut visited = 1u64 << 0;
+        let mut opp_buildings = 0u64;
+        for i in 0..5 {
+            let candidates = adj.node_adj_edges[current] & net.reachable_edges();
+            let eid = candidates.trailing_zeros() as u8;
+            let far = (adj.edge_endpoints[eid as usize] & !visited).trailing_zeros() as usize;
+            if i == 4 {
+                opp_buildings = 1u64 << far;
+            }
+            net.add_road(EdgeId(eid), adj, opp_buildings, 0, true);
+            visited |= 1u64 << far;
+            current = far;
+        }
+
+        assert_eq!(net.longest_road(), 5);
+    }
+
+    #[test]
+    fn cycle_split_by_opponent_building_counts_whole_loop() {
+        let topo = make_topo();
+        let adj = &topo.adj;
+
+        // The six roads around one hex, with an opponent building on a corner.
+        let corners = adj.tile_nodes[9];
+        let mut roads = 0u128;
+        for eid in 0..72 {
+            if adj.edge_endpoints[eid] & !corners == 0 {
+                roads |= 1u128 << eid;
+            }
+        }
+        assert_eq!(roads.count_ones(), 6);
+
+        // Opposite the corner `any_vertex` lands on, so the old fallback
+        // start was not on the opponent building.
+        let opp_buildings = 1u64 << corners.trailing_zeros();
+        assert_eq!(compute_longest_road(roads, adj, opp_buildings), 6);
+        assert_eq!(
+            compute_longest_road_nodes(roads, adj, opp_buildings),
+            corners
+        );
     }
 }
