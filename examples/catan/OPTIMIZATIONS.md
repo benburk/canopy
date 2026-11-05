@@ -208,7 +208,7 @@ from that index onward cannot reach the discard target, cutting
 dead-end branches early.
 
 ```
-Phase::Discard { player, remaining, roller, min_resource }
+Phase::Discard { player, remaining, roller, min_resource, other_pending }
 ```
 
 ## Dominated action pruning
