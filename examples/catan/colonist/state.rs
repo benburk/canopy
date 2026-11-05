@@ -1169,6 +1169,8 @@ fn try_replay(
                                     remaining: hand_total / 2,
                                     roller,
                                     min_resource: 0,
+                                    // The player we expected still owes theirs.
+                                    other_pending: true,
                                 };
                             }
                         }

@@ -111,6 +111,10 @@ pub enum Phase {
         /// Lexicographic lower bound on resource index to prevent
         /// transpositions (discard lumber before brick before wool …).
         min_resource: u8,
+        /// Whether `player`'s opponent still owes a discard after this one.
+        /// Decided when the seven is rolled, so a player left above the
+        /// threshold after halving (20+ cards) is never asked twice.
+        other_pending: bool,
     },
     MoveRobber,
     StealResolve,

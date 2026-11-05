@@ -446,26 +446,27 @@ pub fn handle_seven(state: &mut GameState) {
     let opponent = roller.opponent();
 
     let roller_total = state.players[roller].hand.total();
+    let opp_total = state.players[opponent].hand.total();
+    let opp_discards = opp_total > state.discard_threshold;
     if roller_total > state.discard_threshold {
         state.phase = Phase::Discard {
             player: roller,
             remaining: roller_total / 2,
             roller,
             min_resource: 0,
+            other_pending: opp_discards,
+        };
+    } else if opp_discards {
+        state.current_player = opponent;
+        state.phase = Phase::Discard {
+            player: opponent,
+            remaining: opp_total / 2,
+            roller,
+            min_resource: 0,
+            other_pending: false,
         };
     } else {
-        let opp_total = state.players[opponent].hand.total();
-        if opp_total > state.discard_threshold {
-            state.current_player = opponent;
-            state.phase = Phase::Discard {
-                player: opponent,
-                remaining: opp_total / 2,
-                roller,
-                min_resource: 0,
-            };
-        } else {
-            state.phase = Phase::MoveRobber;
-        }
+        state.phase = Phase::MoveRobber;
     }
 }
 
@@ -807,6 +808,7 @@ fn apply_discard_resource(state: &mut GameState, resource: Resource) {
         player,
         remaining,
         roller,
+        other_pending,
         ..
     } = state.phase
     {
@@ -837,20 +839,23 @@ fn apply_discard_resource(state: &mut GameState, resource: Resource) {
                 remaining: new_remaining,
                 roller,
                 min_resource: min_r,
+                other_pending,
             };
         } else {
-            // Current discard player finished — check if the other player
-            // also needs to discard. Handles either discard order (roller-first
-            // or opponent-first, as colonist may use either).
-            let other = player.opponent();
-            let other_total = state.players[other].hand.total();
-            if other_total > state.discard_threshold {
+            // Current discard player finished — hand off to the other player
+            // if they still owe a discard. Handles either discard order
+            // (roller-first or opponent-first, as colonist may use either).
+            // Don't re-check this player's hand: one who started with 20+
+            // cards is still above the threshold but has already discarded.
+            if other_pending {
+                let other = player.opponent();
                 state.current_player = other;
                 state.phase = Phase::Discard {
                     player: other,
-                    remaining: other_total / 2,
+                    remaining: state.players[other].hand.total() / 2,
                     roller,
                     min_resource: 0,
+                    other_pending: false,
                 };
             } else {
                 state.current_player = roller;
@@ -1532,6 +1537,36 @@ mod tests {
             "after discarding, should move robber, got {:?}",
             state.phase
         );
+    }
+
+    /// A roller with 20+ cards is still above the threshold after halving,
+    /// but must not be asked to discard again after the opponent discards.
+    #[test]
+    fn large_hand_discards_once() {
+        let mut state = make_state_with_seed(42);
+        play_setup(&mut state);
+
+        state.players[Player::One].hand = ResourceArray::new(4, 4, 4, 4, 4);
+        state.players[Player::Two].hand = ResourceArray::new(2, 2, 2, 2, 2);
+        state.current_player = Player::One;
+        handle_seven(&mut state);
+
+        // P1 discards 10, then P2 discards 5.
+        for _ in 0..15 {
+            assert!(matches!(state.phase, Phase::Discard { .. }));
+            let mut actions = Vec::new();
+            action::legal_actions(&state, &mut actions);
+            apply(&mut state, actions[0]);
+        }
+
+        assert_eq!(state.players[Player::One].hand.total(), 10);
+        assert_eq!(state.players[Player::Two].hand.total(), 5);
+        assert!(
+            matches!(state.phase, Phase::MoveRobber),
+            "both players discarded once, should move robber, got {:?}",
+            state.phase
+        );
+        assert_eq!(state.current_player, Player::One);
     }
 
     /// Verify populate_move_robber excludes current robber tile.
