@@ -3111,4 +3111,47 @@ mod tests {
         apply_play_knight(&mut state);
         assert_eq!(state.players[Player::One].tested_non_knight, 0);
     }
+
+    /// The cached longest road always equals a search of the whole road
+    /// graph: a road that extended a branch, or a fifth road off the middle
+    /// of four, once left the cache short.
+    #[test]
+    fn cached_longest_road_matches_a_full_search() {
+        use canopy::game::Status;
+        let mut rng = fastrand::Rng::with_seed(3);
+        let mut legal = Vec::new();
+        let (mut checked, mut wrong) = (0, 0);
+        for seed in 0..300 {
+            let mut state = make_state_with_seed(seed);
+            for _ in 0..3000 {
+                match state.status() {
+                    Status::Terminal(_) => break,
+                    Status::Chance => {
+                        let outcome = state.sample_chance(&mut rng).expect("outcome");
+                        state.apply_action(outcome);
+                    }
+                    Status::Decision(_) => {
+                        state.legal_actions(&mut legal);
+                        state.apply_action(legal[rng.usize(..legal.len())]);
+                    }
+                }
+                for pid in [Player::One, Player::Two] {
+                    let net = &state.boards[pid].road_network;
+                    if net.roads.count_ones() < 5 {
+                        continue;
+                    }
+                    let opp = state.player_buildings(pid.opponent());
+                    checked += 1;
+                    wrong += usize::from(
+                        net.longest_road() != net.longest_road_against(&state.topology.adj, opp),
+                    );
+                }
+            }
+        }
+        assert!(checked > 10_000, "only {checked} positions with five roads");
+        assert_eq!(
+            wrong, 0,
+            "{wrong} of {checked} positions cached the wrong length"
+        );
+    }
 }
